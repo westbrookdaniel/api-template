@@ -4,7 +4,7 @@ A minimal template for building APIs with Fastify.
 
 ## Setup
 
-1. Clone the repository
+1. `npx degit westbrookdaniel/api-template`
 1. Ensure you're using node >=20.16
 1. Copy `.env.example` to `.env`
 1. `pnpm install`
