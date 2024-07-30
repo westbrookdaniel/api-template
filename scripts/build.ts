@@ -15,7 +15,7 @@ await esbuild.build({
     '.json': 'copy',
   },
   target: ['node20.16'],
-  // minify: true,
+  minify: true,
   define: { 'process.env.NODE_ENV': '"production"' },
 });
 
