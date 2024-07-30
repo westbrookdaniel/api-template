@@ -1,93 +1,52 @@
 import path from 'path';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'fs';
-import { glob } from 'glob';
-import { parse, print, visit } from 'recast';
-import typescriptParser from 'recast/parsers/typescript';
+import { readdirSync, readFileSync, writeFileSync } from 'fs';
+
+const resolveExts = ['', '/index.mjs', '/index.js', '.mjs', '.js'];
 
 /**
- * Why not just use .js file extensions like node intended?
- * Well unfortunately drizzle-kit doesn't like .js extensions
- * and .js extensions isn't quite the norm yet in ts anyway
+ * Rewrite relative js/mjs file imports to have a file extension
  *
- * This is also why @babel/parser is installed
- *
- * This is sourced from patch-package creator ds300
- * https://github.com/evanw/esbuild/issues/622#issuecomment-1480099602
+ * See this issue
+ * https://github.com/evanw/esbuild/issues/622
+ * This is inspired by a combination of that thread and
+ * https://github.com/unjs/mkdist/blob/main/src/make.ts
  */
-
-const extensions = ['.js', '.mjs', '.cjs'];
-function resolveRelativePath(importingFile: string, relativePath: string) {
-  if (!relativePath.startsWith('.')) {
-    return relativePath;
-  }
-
-  const containingDir = path.dirname(importingFile);
-
-  if (
-    existsSync(path.join(containingDir, relativePath)) &&
-    !statSync(path.join(containingDir, relativePath)).isDirectory()
-  ) {
-    // if the file already exists, e.g. .css files, just use it
-    return relativePath;
-  }
-
-  // strip the file extension if applicable
-  relativePath.replace(/\.(m|c)?js$/, '');
-
-  for (const extension of extensions) {
-    if (relativePath.endsWith(extension)) {
-      return relativePath;
-    } else {
-      let candidate = `${relativePath}${extension}`;
-      if (existsSync(path.join(containingDir, candidate))) {
-        return candidate;
-      }
-
-      candidate = `${relativePath}/index${extension}`;
-
-      if (existsSync(path.join(containingDir, candidate))) {
-        return candidate;
-      }
-    }
-  }
-
-  throw new Error(
-    `Could not resolve relative path ${relativePath} from ${importingFile}`
-  );
-}
-
 export function addJsExtensions(distDir: string) {
-  for (const file of glob.sync(path.join(distDir, '**/*.{mjs,cjs,js}'))) {
-    const code = parse(readFileSync(file, 'utf8'), {
-      parser: typescriptParser,
-    });
+  const outPaths = readdirSync(distDir, { recursive: true })
+    .filter((p) => {
+      if (p instanceof Buffer) return false;
+      return p.endsWith('.js') || p.endsWith('.mjs');
+    })
+    .map((p) => 'dist/' + p);
 
-    visit(code, {
-      visitImportDeclaration(path) {
-        path.value.source.value = resolveRelativePath(
-          file,
-          path.value.source.value
-        );
-        return false;
-      },
-      visitExportAllDeclaration(path) {
-        path.value.source.value = resolveRelativePath(
-          file,
-          path.value.source.value
-        );
-        return false;
-      },
-      visitExportNamedDeclaration(path) {
-        if (path.value.source) {
-          path.value.source.value = resolveRelativePath(
-            file,
-            path.value.source.value
-          );
-        }
-        return false;
-      },
-    });
+  /** If using tsconfig paths this needs to be updated */
+  function isRelative(path: string) {
+    return path.startsWith('.');
+  }
 
-    writeFileSync(file, print(code).code);
+  function resolveId(from: string, id = '') {
+    if (!isRelative(id)) return id;
+    for (const extension of resolveExts) {
+      const resolvedPath = path.join(path.dirname(from), id + extension);
+      if (outPaths.includes(resolvedPath)) return id + extension;
+    }
+    return id;
+  }
+
+  for (const outPath of outPaths) {
+    const contents = readFileSync(outPath, 'utf8')
+      // Resolve import statements
+      .replace(
+        /(import|export)(\s+(?:.+|{[\s\w,]+})\s+from\s+["'])(.*)(["'])/g,
+        (_, type, head, id, tail) => type + head + resolveId(outPath, id) + tail
+      )
+      // Resolve dynamic import
+      .replace(
+        /import\((["'])(.*)(["'])\)/g,
+        (_, head, id, tail) =>
+          'import(' + head + resolveId(outPath, id) + tail + ')'
+      );
+
+    writeFileSync(outPath, contents);
   }
 }
